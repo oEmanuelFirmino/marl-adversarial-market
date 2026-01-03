@@ -9,10 +9,15 @@ class SimpleMarketMechanics(MarketPhysics):
         self.base_price = 100.0
 
     def reset(self) -> MarketState:
+
+        sentiment = np.random.uniform(0.8, 1.2)
+
         return MarketState(
             step_count=0,
             global_volatility=np.random.uniform(0.1, 0.3),
-            responder_budget=np.random.uniform(80, 150),
+            competitor_intensity=np.random.uniform(0.0, 0.3),
+            market_sentiment=sentiment,
+            responder_budget=np.random.uniform(80, 150) * sentiment,
             responder_urgency=np.random.uniform(0.0, 1.0),
             proposer_cash=1000.0,
             proposer_active_deals=0,
@@ -25,9 +30,10 @@ class SimpleMarketMechanics(MarketPhysics):
     def compute_step(self, state: MarketState, actions: dict) -> StepResult:
         """
         Lógica:
-        1. Proposer propõe Preço (Baseado na ação: Baixo, Médio, Alto).
-        2. Seguradora define Taxa (Baseado na ação: Baixa, Média, Alta).
-        3. Responder decide (Comprar ou Esperar) baseado na utilidade (Preço + Urgência).
+        1. Proposer propõe Preço.
+        2. Seguradora define Taxa.
+        3. Verifica-se 'Risco de Concorrência' (Competitor Snatch).
+        4. Se não perdeu para concorrência, Responder decide (Comprar/Sair).
         """
 
         act_proposer = actions.get(AgentID("proposer"), 0)
@@ -43,20 +49,36 @@ class SimpleMarketMechanics(MarketPhysics):
         final_price = offered_price + insurance_cost
 
         deal_done = False
+
         rewards = {
             AgentID("responder"): -0.1,
             AgentID("proposer"): -0.1,
             AgentID("regulator"): 0.0,
         }
 
-        if act_responder == 1:
+        competitor_snatch = False
+
+        if np.random.random() < (state.competitor_intensity * 0.1):
+            competitor_snatch = True
+
+        if competitor_snatch:
+
+            rewards[AgentID("proposer")] -= 5.0
+
+            rewards[AgentID("responder")] += 1.0
+
+            deal_done = False
+
+        elif act_responder == 1:
             if final_price <= state.responder_budget:
                 deal_done = True
 
-                rewards[AgentID("responder")] = (state.responder_budget - final_price) + (
-                    state.responder_urgency * 10
-                )
+                rewards[AgentID("responder")] = (
+                    state.responder_budget - final_price
+                ) + (state.responder_urgency * 10)
+
                 rewards[AgentID("proposer")] = final_price - 50.0
+
                 rewards[AgentID("regulator")] = insurance_cost - (
                     2.0 if state.global_volatility > 0.5 else 0.0
                 )
@@ -70,6 +92,8 @@ class SimpleMarketMechanics(MarketPhysics):
         new_state = MarketState(
             step_count=state.step_count + 1,
             global_volatility=state.global_volatility,
+            competitor_intensity=state.competitor_intensity,
+            market_sentiment=state.market_sentiment,
             responder_budget=state.responder_budget,
             responder_urgency=min(1.0, state.responder_urgency + 0.05),
             proposer_cash=state.proposer_cash
@@ -82,11 +106,16 @@ class SimpleMarketMechanics(MarketPhysics):
             transaction_occurred=deal_done,
         )
 
-        done = (new_state.step_count >= self.max_steps) or deal_done or (act_responder == 2)
+        done = (
+            (new_state.step_count >= self.max_steps)
+            or deal_done
+            or (act_responder == 2)
+            or competitor_snatch
+        )
 
         return StepResult(
             next_state=new_state,
             rewards=rewards,
             done=done,
-            info={"price": final_price, "deal": deal_done},
+            info={"price": final_price, "deal": deal_done, "snatch": competitor_snatch},
         )

@@ -20,7 +20,7 @@ class MarketAdversarialEnv(ParallelEnv):
         }
 
         self._observation_spaces = {
-            agent: spaces.Box(low=0.0, high=1.0, shape=(5,), dtype=np.float32)
+            agent: spaces.Box(low=0.0, high=1.0, shape=(7,), dtype=np.float32)
             for agent in self.possible_agents
         }
 
@@ -61,7 +61,6 @@ class MarketAdversarialEnv(ParallelEnv):
         return observations, rewards, terminations, truncations, infos
 
     def _make_obs(self, state, agent_id):
-
         obs = np.array(
             [
                 state.global_volatility,
@@ -69,6 +68,9 @@ class MarketAdversarialEnv(ParallelEnv):
                 min(state.responder_budget / 200.0, 1.0),
                 min(state.last_transaction_price / 200.0, 1.0),
                 state.step_count / 100.0,
+                # NOVAS
+                state.competitor_intensity,
+                state.market_sentiment / 2.0,
             ],
             dtype=np.float32,
         )

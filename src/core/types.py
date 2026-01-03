@@ -26,6 +26,9 @@ class MarketState:
     step_count: int
     global_volatility: float
 
+    competitor_intensity: float
+    market_sentiment: float
+
     responder_budget: float
     responder_urgency: float
 
