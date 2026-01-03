@@ -9,13 +9,12 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Hack de Path para encontrar módulos src
+# Hack de Path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.envs.market_env import MarketAdversarialEnv
 from src.agents.baselines.rule_based import FixedRegulator, ThresholdResponder
 from src.engine.trainer import BeliefPPOTrainer
-from src.core.types import ActionType
 
 # --- Configuração da Página ---
 st.set_page_config(
@@ -47,6 +46,7 @@ st.markdown(
 def load_system():
     env = MarketAdversarialEnv()
 
+    # Carrega agente com Memória Recorrente
     agent = BeliefPPOTrainer(env, agent_id="proposer", opponent_id="responder")
     model_path = "data/models/belief_agent_v1.pt"
 
@@ -76,7 +76,6 @@ if "history" not in st.session_state:
     st.session_state.history = []
 if "running" not in st.session_state:
     st.session_state.running = False
-
 if "sim_params" not in st.session_state:
     st.session_state.sim_params = {
         "volatility": 0.2,
@@ -87,26 +86,36 @@ if "sim_params" not in st.session_state:
 
 # --- Sidebar ---
 with st.sidebar:
-    st.header("🎛️ Configuração do Cenário")
+    st.header("🎛️ Configuração")
 
+    # Controle de Batch/Performance (NOVO)
+    st.markdown("### 🚀 Performance")
+    steps_per_frame = st.slider(
+        "Atualização do Gráfico (Passos/Frame)",
+        min_value=1,
+        max_value=50,
+        value=5,
+        help="Quanto maior, mais rápido a simulação roda e menos trava a interface.",
+    )
+
+    st.divider()
+
+    # Modo Estocástico
     stochastic_mode = st.checkbox("🎲 Modo Estocástico", value=False)
-
     if stochastic_mode:
-        st.caption("Valores variam automaticamente.")
         drift = st.slider("Intensidade (Drift)", 0.01, 0.2, 0.05)
     else:
         drift = 0.0
 
     st.divider()
 
+    # Parâmetros Físicos
     volatility = st.slider(
         "Volatilidade", 0.0, 1.0, st.session_state.sim_params["volatility"]
     )
     urgency = st.slider("Urgência", 0.0, 1.0, st.session_state.sim_params["urgency"])
-
-    st.markdown("### 🏴‍☠️ Concorrência")
     competitor_intensity = st.slider(
-        "Agressividade", 0.0, 1.0, st.session_state.sim_params["competitor"]
+        "Concorrência", 0.0, 1.0, st.session_state.sim_params["competitor"]
     )
     market_sentiment = st.slider(
         "Sentimento", 0.5, 1.5, st.session_state.sim_params["sentiment"]
@@ -114,19 +123,20 @@ with st.sidebar:
 
     st.divider()
 
-    col_play, col_stop = st.columns(2)
-    if col_play.button("▶️ Auto Play"):
+    # Callbacks de Controle
+    def start_sim():
         st.session_state.running = True
-        st.rerun()  # Força refresh para iniciar loop
-    if col_stop.button("II Pause"):
+
+    def stop_sim():
         st.session_state.running = False
-        st.rerun()
+
+    col_play, col_stop = st.columns(2)
+    col_play.button("▶️ Auto Play", on_click=start_sim)
+    col_stop.button("II Pause", on_click=stop_sim)
 
     if st.button("⏭️ Passo Único"):
         st.session_state.running = False
-        run_step = True
-    else:
-        run_step = False
+        st.session_state.do_step = True
 
     if st.button("🗑️ Resetar Tudo", type="primary"):
         st.session_state.history = []
@@ -137,7 +147,9 @@ with st.sidebar:
             "sentiment": 1.0,
         }
         env.reset()
+        agent.reset_memory()
         st.session_state.running = False
+        st.session_state.do_step = False
         st.rerun()
 
 
@@ -147,6 +159,7 @@ def perturb_value(val, drift, min_val=0.0, max_val=1.0):
     return np.clip(val + noise, min_val, max_val)
 
 
+# --- Lógica de Execução (Backend) ---
 def execute_step():
     # 0. Atualizar Parâmetros
     if stochastic_mode:
@@ -170,6 +183,7 @@ def execute_step():
 
     if env.state_data is None:
         obs, _ = env.reset()
+        agent.reset_memory()
     else:
         env.state_data.global_volatility = st.session_state.sim_params["volatility"]
         env.state_data.responder_urgency = st.session_state.sim_params["urgency"]
@@ -188,7 +202,7 @@ def execute_step():
     actions = {"proposer": act_prop, "responder": act_resp, "regulator": act_reg}
     next_obs, rewards, terms, _, infos = env.step(actions)
 
-    # 4. Logging Completo
+    # 4. Logging
     belief_vector = (
         belief_probs[0].tolist() if belief_probs.dim() > 1 else belief_probs.tolist()
     )
@@ -218,15 +232,16 @@ def execute_step():
 
     if all(terms.values()):
         env.reset()
+        agent.reset_memory()
 
 
 # ==============================================================================
-# 1. RENDERIZAÇÃO (AGORA VEM ANTES DA EXECUÇÃO PARA APARECER EM TEMPO REAL)
+# RENDERIZAÇÃO (Frontend)
 # ==============================================================================
 
 st.title("🛡️ MARL Adversarial Market: War Room")
 
-# Se tivermos histórico (mesmo que antigo ou acabado de gerar), mostramos
+# Renderizamos apenas se houver dados
 if st.session_state.history:
     df = pd.DataFrame(st.session_state.history)
     last_row = df.iloc[-1]
@@ -254,7 +269,7 @@ if st.session_state.history:
     acc = np.mean(pred_actions == df["Real_Action"].values) * 100
     kpi4.metric("Acurácia IA", f"{acc:.1f}%")
 
-    # --- ABAS ---
+    # Abas
     tab_market, tab_comp, tab_brain, tab_table = st.tabs(
         [
             "📈 Dinâmica de Mercado",
@@ -264,7 +279,6 @@ if st.session_state.history:
         ]
     )
 
-    # 1. Dinâmica de Mercado
     with tab_market:
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         fig.add_trace(
@@ -321,7 +335,6 @@ if st.session_state.history:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # 2. Batalha de Market Share
     with tab_comp:
         col_c1, col_c2 = st.columns([3, 1])
         with col_c1:
@@ -347,20 +360,17 @@ if st.session_state.history:
                     fill="tonexty",
                 )
             )
-
             fig_share.update_layout(
-                title="Acumulado: Quem está a dominar o mercado?",
+                title="Acumulado: Market Share",
                 template="plotly_dark",
                 height=400,
                 yaxis_title="Volume de Negócios",
             )
             st.plotly_chart(fig_share, use_container_width=True)
-
         with col_c2:
             st.markdown("### Análise")
-            st.markdown("Área Verde = Sucesso. Área Vermelha = Falha Competitiva.")
+            st.markdown("Monitoramento de pressão competitiva acumulada.")
 
-    # 3. Inspeção da IA
     with tab_brain:
         col_b1, col_b2 = st.columns([1, 2])
         with col_b1:
@@ -404,20 +414,24 @@ if st.session_state.history:
             )
             st.plotly_chart(fig_stack, use_container_width=True)
 
-    # 4. Tabela
     with tab_table:
-        st.markdown("### 📄 Registro Completo")
-        csv = df.to_csv(index=False).encode("utf-8")
+        st.markdown("### 📄 Registro")
+        csv_data = df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            "📥 Baixar Log (CSV)", data=csv, file_name="marl_log.csv", mime="text/csv"
+            label="📥 Baixar Log (CSV)",
+            data=csv_data,
+            file_name="marl_log.csv",
+            mime="text/csv",
+            key=f"dl_{len(df)}",
         )
 
         def highlight_events(row):
+            # Correção do erro CSS: retorna None em vez de string vazia
             if row.Deal == 1:
                 return ["background-color: rgba(0, 255, 170, 0.2)"] * len(row)
             elif row.Snatch == 1:
                 return ["background-color: rgba(255, 68, 68, 0.2)"] * len(row)
-            return [""] * len(row)
+            return [None] * len(row)
 
         df_display = df.sort_values("Step", ascending=False)
         st.dataframe(
@@ -439,20 +453,20 @@ else:
     st.info("A simulação está parada. Clique em '▶️ Auto Play' na sidebar.")
 
 # ==============================================================================
-# 2. LÓGICA DE CONTROLE (NO FINAL DO ARQUIVO)
+# CONTROL LOOP (Executa múltiplos passos antes de atualizar a UI)
 # ==============================================================================
 
 if st.session_state.running:
-    # Executa o passo
-    execute_step()
+    # BATCH PROCESSING: O segredo para performance e responsividade
+    # Executa N passos lógicos sem tocar na UI
+    for _ in range(steps_per_frame):
+        execute_step()
 
-    # Pequeno delay para visualização suave
-    time.sleep(0.05)
-
-    # Rerun para atualizar a tela (voltando ao topo, onde a renderização ocorre com os dados novos)
+    # Atualiza a interface (Rerun) apenas uma vez após o lote
+    time.sleep(0.01)  # Delay mínimo só para yield da thread
     st.rerun()
 
-elif run_step:
+elif st.session_state.get("do_step", False):
+    st.session_state.do_step = False
     execute_step()
-    # No caso de passo único, também damos rerun para mostrar o resultado imediatamente
     st.rerun()

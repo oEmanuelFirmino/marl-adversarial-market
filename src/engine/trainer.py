@@ -1,13 +1,13 @@
 import torch
 import torch.nn as nn
-from src.agents.policy.network import ActorCritic, AugmentedActorCritic
-from src.agents.belief.predictor import BeliefNetwork
+from src.agents.policy.network import ActorCritic, RecurrentActorCritic
+from src.agents.belief.predictor import BeliefNetwork, RecurrentBeliefNetwork
 from src.engine.buffer import RolloutBuffer
 
 
 class PPOTrainer:
     def __init__(
-        self, env, agent_id="broker", lr=3e-4, gamma=0.99, K_epochs=4, eps_clip=0.2
+        self, env, agent_id="proposer", lr=3e-4, gamma=0.99, K_epochs=4, eps_clip=0.2
     ):
         self.env = env
         self.agent_id = agent_id
@@ -68,8 +68,8 @@ class BeliefPPOTrainer:
     def __init__(
         self,
         env,
-        agent_id="broker",
-        opponent_id="lead",
+        agent_id="proposer",
+        opponent_id="responder",
         lr=0.002,
         gamma=0.99,
         eps_clip=0.2,
@@ -85,22 +85,55 @@ class BeliefPPOTrainer:
         self.action_dim = env.action_space(agent_id).n
         self.opp_action_dim = env.action_space(opponent_id).n
 
-        self.belief_net = BeliefNetwork(self.obs_dim, self.opp_action_dim)
+        self.hidden_dim = 64
+
+        self.belief_net = RecurrentBeliefNetwork(
+            self.obs_dim, self.opp_action_dim, self.hidden_dim
+        )
+
+        self.policy = RecurrentActorCritic(
+            self.obs_dim, self.opp_action_dim, self.action_dim, self.hidden_dim
+        )
+
         self.belief_optimizer = torch.optim.Adam(self.belief_net.parameters(), lr=lr)
         self.belief_loss_fn = nn.CrossEntropyLoss()
 
-        self.policy = AugmentedActorCritic(
-            self.obs_dim, self.opp_action_dim, self.action_dim
-        )
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
 
-        self.policy_old = AugmentedActorCritic(
-            self.obs_dim, self.opp_action_dim, self.action_dim
+        self.policy_old = RecurrentActorCritic(
+            self.obs_dim, self.opp_action_dim, self.action_dim, self.hidden_dim
         )
         self.policy_old.load_state_dict(self.policy.state_dict())
 
         self.buffer = RolloutBuffer()
         self.mse_loss = nn.MSELoss()
+
+        self.reset_memory()
+
+    def reset_memory(self):
+        """Reinicia a memória (Hidden States). Chamar no início do episódio."""
+
+        self.h_belief = torch.zeros(1, 1, self.hidden_dim)
+        self.h_policy = torch.zeros(1, 1, self.hidden_dim)
+
+    def save_checkpoint(self, path):
+        torch.save(
+            {
+                "policy_state_dict": self.policy.state_dict(),
+                "belief_state_dict": self.belief_net.state_dict(),
+                "optimizer_policy": self.optimizer.state_dict(),
+                "optimizer_belief": self.belief_optimizer.state_dict(),
+            },
+            path,
+        )
+
+    def load_checkpoint(self, path):
+        checkpoint = torch.load(path)
+        self.policy.load_state_dict(checkpoint["policy_state_dict"])
+        self.policy_old.load_state_dict(checkpoint["policy_state_dict"])
+        self.belief_net.load_state_dict(checkpoint["belief_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_policy"])
+        self.belief_optimizer.load_state_dict(checkpoint["optimizer_belief"])
 
     def select_action(self, state):
         with torch.no_grad():
@@ -110,10 +143,15 @@ class BeliefPPOTrainer:
             if not has_batch_dim:
                 state_t = state_t.unsqueeze(0)
 
-            belief_probs = self.belief_net.get_probs(state_t)
+            belief_probs, self.h_belief = self.belief_net.get_probs(
+                state_t, self.h_belief
+            )
 
-            action, log_prob = self.policy_old.get_action(state_t, belief_probs)
-            val = self.policy_old.get_value(state_t)
+            action, log_prob, self.h_policy = self.policy_old.get_action(
+                state_t, belief_probs, self.h_policy
+            )
+
+            val = self.policy_old.get_value(state_t, belief_probs, self.h_policy)
 
             if not has_batch_dim:
                 belief_probs = belief_probs.squeeze(0)
@@ -125,23 +163,31 @@ class BeliefPPOTrainer:
         old_states, old_actions, old_logprobs, returns = (
             self.buffer.compute_gae_and_returns(0.0, self.gamma)
         )
-
         b_states, b_probs_old, b_targets = self.buffer.get_belief_data()
+
+        batch_size = old_states.size(0)
+        h_belief_batch = torch.zeros(1, batch_size, self.hidden_dim)
+        h_policy_batch = torch.zeros(1, batch_size, self.hidden_dim)
 
         avg_belief_loss = 0
         for _ in range(self.K_epochs):
-            predicted_logits = self.belief_net(b_states)
+
+            predicted_logits, _ = self.belief_net(b_states, h_belief_batch)
             belief_loss = self.belief_loss_fn(predicted_logits, b_targets)
+
             self.belief_optimizer.zero_grad()
             belief_loss.backward()
             self.belief_optimizer.step()
             avg_belief_loss += belief_loss.item()
+
         avg_belief_loss /= self.K_epochs
 
         for _ in range(self.K_epochs):
+
             logprobs, state_values, dist_entropy = self.policy.evaluate(
-                old_states, b_probs_old, old_actions
+                old_states, b_probs_old, old_actions, h_policy_batch
             )
+
             ratios = torch.exp(logprobs - old_logprobs.detach())
             advantages = returns - state_values.detach().squeeze()
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
@@ -150,6 +196,7 @@ class BeliefPPOTrainer:
             surr2 = (
                 torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
             )
+
             loss = (
                 -torch.min(surr1, surr2)
                 + 0.5 * self.mse_loss(state_values.squeeze(), returns)
@@ -163,26 +210,7 @@ class BeliefPPOTrainer:
         self.policy_old.load_state_dict(self.policy.state_dict())
         self.buffer.clear()
 
+        self.h_belief = self.h_belief.detach()
+        self.h_policy = self.h_policy.detach()
+
         return avg_belief_loss
-
-    def save_checkpoint(self, path):
-        """Salva os pesos da Política e da Rede de Crença."""
-        torch.save(
-            {
-                "policy_state_dict": self.policy.state_dict(),
-                "belief_state_dict": self.belief_net.state_dict(),
-                "optimizer_policy": self.optimizer.state_dict(),
-                "optimizer_belief": self.belief_optimizer.state_dict(),
-            },
-            path,
-        )
-
-    def load_checkpoint(self, path):
-        """Carrega os pesos salvos."""
-        checkpoint = torch.load(path)
-        self.policy.load_state_dict(checkpoint["policy_state_dict"])
-        self.policy_old.load_state_dict(checkpoint["policy_state_dict"])
-        self.belief_net.load_state_dict(checkpoint["belief_state_dict"])
-
-        self.optimizer.load_state_dict(checkpoint["optimizer_policy"])
-        self.belief_optimizer.load_state_dict(checkpoint["optimizer_belief"])

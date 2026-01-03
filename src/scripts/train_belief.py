@@ -3,7 +3,7 @@ import os
 import torch
 import matplotlib.pyplot as plt
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.envs.market_env import MarketAdversarialEnv
 from src.agents.baselines.rule_based import FixedRegulator, ThresholdResponder
@@ -11,9 +11,10 @@ from src.engine.trainer import BeliefPPOTrainer
 
 
 def train_belief_system():
-    print(">>> Iniciando Treinamento Híbrido (PPO + Belief) <<<")
+    print(">>> Iniciando Treinamento Híbrido (PPO Recorrente + Belief) <<<")
 
     env = MarketAdversarialEnv()
+
     responder = ThresholdResponder(
         "responder", env.observation_space("responder"), env.action_space("responder")
     )
@@ -26,42 +27,42 @@ def train_belief_system():
     history_rewards = []
     history_belief_loss = []
 
-    max_episodes = 2000
-    update_timestep = 600
+    max_episodes = 2500
+    update_timestep = 800
     time_step = 0
-
-    running_loss = 1.0
 
     for ep in range(max_episodes):
         obs, _ = env.reset()
+        agent.reset_memory()
+
         ep_reward = 0
 
         while True:
 
-            act_brk, log_brk, val_brk, belief_probs = agent.select_action(
+            act_prop, log_prop, val_prop, belief_probs = agent.select_action(
                 obs["proposer"]
             )
 
-            act_responder = responder.act(obs["responder"])
-            act_ins = regulator.act(obs["regulator"])
+            act_resp = responder.act(obs["responder"])
+            act_reg = regulator.act(obs["regulator"])
 
             actions = {
-                "proposer": act_brk,
-                "responder": act_responder,
-                "regulator": act_ins,
+                "proposer": act_prop,
+                "responder": act_resp,
+                "regulator": act_reg,
             }
             next_obs, rewards, terms, truncs, _ = env.step(actions)
-            done = all(terms.values())
+            done = all(terms.values()) or all(truncs.values())
 
             agent.buffer.add(
-                torch.tensor(obs["proposer"], dtype=torch.float32),
-                torch.tensor(act_brk),
-                log_brk,
+                obs["proposer"],
+                torch.tensor(act_prop),
+                log_prop,
                 rewards["proposer"],
-                torch.tensor(val_brk),
+                torch.tensor(val_prop),
                 done,
                 belief_probs,
-                act_responder,
+                act_resp,
             )
 
             obs = next_obs
@@ -77,37 +78,47 @@ def train_belief_system():
 
         history_rewards.append(ep_reward)
 
-        if ep % 100 == 0:
-            avg_loss = sum(history_belief_loss[-10:]) / 10 if history_belief_loss else 0
-            print(f"Ep {ep} | Reward: {ep_reward:.2f} | Belief Loss: {avg_loss:.4f}")
-
-    fig, ax1 = plt.subplots()
+        if ep % 50 == 0:
+            avg_loss = (
+                sum(history_belief_loss[-10:]) / 10 if history_belief_loss else 0.0
+            )
+            avg_rew = sum(history_rewards[-50:]) / 50
+            print(f"Ep {ep} | Avg Reward: {avg_rew:.2f} | Belief Loss: {avg_loss:.4f}")
 
     os.makedirs("data/models", exist_ok=True)
     model_path = "data/models/belief_agent_v1.pt"
     agent.save_checkpoint(model_path)
     print(f">>> Modelo salvo em '{model_path}'")
 
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
     color = "tab:blue"
     ax1.set_xlabel("Updates")
-    ax1.set_ylabel("Belief Loss (Quanto menor, melhor)", color=color)
-    ax1.plot(history_belief_loss, color=color, alpha=0.6)
+    ax1.set_ylabel("Belief Loss", color=color)
+    ax1.plot(history_belief_loss, color=color, alpha=0.6, label="Loss (Previsão)")
     ax1.tick_params(axis="y", labelcolor=color)
 
     ax2 = ax1.twinx()
     color = "tab:green"
-    ax2.set_ylabel("Reward (Quanto maior, melhor)", color=color)
+    ax2.set_ylabel("Reward (Média Móvel)", color=color)
 
+    window = 50
     smooth_rewards = [
-        sum(history_rewards[i : i + 50]) / 50
-        for i in range(0, len(history_rewards), 50)
+        sum(history_rewards[i : i + window]) / window
+        for i in range(0, len(history_rewards), window)
     ]
-    ax2.plot(range(len(smooth_rewards)), smooth_rewards, color=color)
+    ax2.plot(
+        range(0, len(history_rewards), window),
+        smooth_rewards,
+        color=color,
+        label="Reward",
+    )
     ax2.tick_params(axis="y", labelcolor=color)
 
-    plt.title("Evolução: Inteligência Estratégica vs Lucro")
-    plt.savefig("belief_validation.png")
-    print(">>> Resultados salvos em 'belief_validation.png'")
+    plt.title("Treinamento: Recurrent PPO + Belief")
+    plt.tight_layout()
+    plt.savefig("recurrent_training.png")
+    print(">>> Gráfico salvo em 'recurrent_training.png'")
 
 
 if __name__ == "__main__":

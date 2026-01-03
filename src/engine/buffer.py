@@ -39,6 +39,7 @@ class RolloutBuffer:
         Adiciona uma transição ao buffer.
         belief_prob e opp_action são opcionais (None para PPO Vanilla, Preenchidos para Belief PPO).
         """
+
         self.states.append(state)
         self.actions.append(action)
         self.logprobs.append(logprob)
@@ -80,7 +81,7 @@ class RolloutBuffer:
         returns = torch.tensor(returns, dtype=torch.float32)
         returns = (returns - returns.mean()) / (returns.std() + 1e-7)
 
-        if isinstance(self.states[0], np.ndarray):
+        if len(self.states) > 0 and isinstance(self.states[0], np.ndarray):
             old_states = torch.tensor(np.array(self.states), dtype=torch.float32)
         else:
             old_states = torch.stack(self.states).detach()
@@ -97,8 +98,13 @@ class RolloutBuffer:
                 "Buffer não contém dados de crença. Verifique se belief_prob/opp_action foram passados no .add()"
             )
 
+        if len(self.states) > 0 and isinstance(self.states[0], np.ndarray):
+            states_tensor = torch.tensor(np.array(self.states), dtype=torch.float32)
+        else:
+            states_tensor = torch.stack(self.states).detach()
+
         return (
-            torch.stack(self.states).detach(),
+            states_tensor,
             torch.stack(self.belief_probs).detach(),
             torch.stack(self.opponent_actions).detach(),
         )
