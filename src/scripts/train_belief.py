@@ -38,12 +38,18 @@ def train_belief_system():
 
         while True:
 
-            act_brk, log_brk, val_brk, belief_probs = agent.select_action(obs["proposer"])
+            act_brk, log_brk, val_brk, belief_probs = agent.select_action(
+                obs["proposer"]
+            )
 
             act_responder = responder.act(obs["responder"])
             act_ins = regulator.act(obs["regulator"])
 
-            actions = {"proposer": act_brk, "responder": act_responder, "regulator": act_ins}
+            actions = {
+                "proposer": act_brk,
+                "responder": act_responder,
+                "regulator": act_ins,
+            }
             next_obs, rewards, terms, truncs, _ = env.step(actions)
             done = all(terms.values())
 
@@ -76,6 +82,11 @@ def train_belief_system():
             print(f"Ep {ep} | Reward: {ep_reward:.2f} | Belief Loss: {avg_loss:.4f}")
 
     fig, ax1 = plt.subplots()
+
+    os.makedirs("data/models", exist_ok=True)
+    model_path = "data/models/belief_agent_v1.pt"
+    agent.save_checkpoint(model_path)
+    print(f">>> Modelo salvo em '{model_path}'")
 
     color = "tab:blue"
     ax1.set_xlabel("Updates")

@@ -106,10 +106,18 @@ class BeliefPPOTrainer:
         with torch.no_grad():
             state_t = torch.FloatTensor(state)
 
+            has_batch_dim = state_t.dim() > 1
+            if not has_batch_dim:
+                state_t = state_t.unsqueeze(0)
+
             belief_probs = self.belief_net.get_probs(state_t)
 
             action, log_prob = self.policy_old.get_action(state_t, belief_probs)
             val = self.policy_old.get_value(state_t)
+
+            if not has_batch_dim:
+                belief_probs = belief_probs.squeeze(0)
+
         return action.item(), log_prob, val.item(), belief_probs
 
     def update(self):
@@ -156,3 +164,25 @@ class BeliefPPOTrainer:
         self.buffer.clear()
 
         return avg_belief_loss
+
+    def save_checkpoint(self, path):
+        """Salva os pesos da Política e da Rede de Crença."""
+        torch.save(
+            {
+                "policy_state_dict": self.policy.state_dict(),
+                "belief_state_dict": self.belief_net.state_dict(),
+                "optimizer_policy": self.optimizer.state_dict(),
+                "optimizer_belief": self.belief_optimizer.state_dict(),
+            },
+            path,
+        )
+
+    def load_checkpoint(self, path):
+        """Carrega os pesos salvos."""
+        checkpoint = torch.load(path)
+        self.policy.load_state_dict(checkpoint["policy_state_dict"])
+        self.policy_old.load_state_dict(checkpoint["policy_state_dict"])
+        self.belief_net.load_state_dict(checkpoint["belief_state_dict"])
+
+        self.optimizer.load_state_dict(checkpoint["optimizer_policy"])
+        self.belief_optimizer.load_state_dict(checkpoint["optimizer_belief"])
