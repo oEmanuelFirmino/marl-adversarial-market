@@ -147,7 +147,9 @@ class DynamicResponder:
         budget_norm = obs[2]
         price_norm = obs[3]
 
-        ratio = price_norm / (budget_norm + 1e-5)
+        safe_budget = max(budget_norm, 1e-3)
+
+        ratio = price_norm / safe_budget
 
         if ratio > 1.05:
             base_prob = 0.0

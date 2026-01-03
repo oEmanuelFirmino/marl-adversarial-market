@@ -1,3 +1,4 @@
+# src/app/dashboard.py
 import sys
 import os
 import time
@@ -7,14 +8,17 @@ import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from dataclasses import (
+    replace,
+)  # <--- IMPORTANTE: Necessário para modificar estados frozen
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.envs.market_env import MarketAdversarialEnv
-
-from src.agents.baselines.rule_based import FixedRegulator, StochasticResponder
+from src.agents.baselines.rule_based import FixedRegulator, DynamicResponder
 from src.engine.trainer import BeliefPPOTrainer
 
+# --- Configuração da Página ---
 st.set_page_config(
     page_title="MARL War Room",
     page_icon="🛡️",
@@ -22,6 +26,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# --- CSS Customizado ---
 st.markdown(
     """
 <style>
@@ -38,12 +43,13 @@ st.markdown(
 )
 
 
+# --- Singleton: Carregar Sistema ---
 @st.cache_resource
 def load_system():
     env = MarketAdversarialEnv()
 
     agent = BeliefPPOTrainer(env, agent_id="proposer", opponent_id="responder")
-    model_path = "data/models/belief_agent_v3.pt"
+    model_path = "data/models/belief_agent_v5.pt"
 
     if os.path.exists(model_path):
         agent.load_checkpoint(model_path)
@@ -54,11 +60,8 @@ def load_system():
     agent.policy.eval()
     agent.belief_net.eval()
 
-    responder = StochasticResponder(
-        "responder",
-        env.observation_space("responder"),
-        env.action_space("responder"),
-        irrationality=0.1,
+    responder = DynamicResponder(
+        "responder", env.observation_space("responder"), env.action_space("responder")
     )
     regulator = FixedRegulator(
         "regulator", env.observation_space("regulator"), env.action_space("regulator")
@@ -69,10 +72,13 @@ def load_system():
 
 env, agent, responder, regulator = load_system()
 
+# --- Estado da Sessão ---
 if "history" not in st.session_state:
     st.session_state.history = []
 if "running" not in st.session_state:
     st.session_state.running = False
+if "persona" not in st.session_state:
+    st.session_state.persona = "Unknown"
 if "sim_params" not in st.session_state:
     st.session_state.sim_params = {
         "volatility": 0.2,
@@ -81,8 +87,11 @@ if "sim_params" not in st.session_state:
         "sentiment": 1.0,
     }
 
+# --- Sidebar ---
 with st.sidebar:
     st.header("🎛️ Configuração")
+
+    st.info(f"🎭 Oponente Atual: **{st.session_state.persona}**")
 
     st.markdown("### 🚀 Performance")
     steps_per_frame = st.slider(
@@ -126,7 +135,7 @@ with st.sidebar:
         st.session_state.running = False
         st.session_state.do_step = True
 
-    if st.button("🗑️ Resetar Tudo", type="primary"):
+    if st.button("🗑️ Resetar Tudo (Nova Persona)", type="primary"):
         st.session_state.history = []
         st.session_state.sim_params = {
             "volatility": 0.2,
@@ -134,19 +143,27 @@ with st.sidebar:
             "competitor": 0.1,
             "sentiment": 1.0,
         }
+
         env.reset()
         agent.reset_memory()
+
+        new_persona = responder.reset_persona()
+        st.session_state.persona = new_persona
+
         st.session_state.running = False
         st.session_state.do_step = False
         st.rerun()
 
 
+# --- Função Auxiliar ---
 def perturb_value(val, drift, min_val=0.0, max_val=1.0):
     noise = np.random.uniform(-drift, drift)
     return np.clip(val + noise, min_val, max_val)
 
 
+# --- Lógica de Execução (Backend) ---
 def execute_step():
+    # 0. Atualizar Parâmetros da Simulação
     if stochastic_mode:
         st.session_state.sim_params["volatility"] = perturb_value(
             st.session_state.sim_params["volatility"], drift
@@ -169,20 +186,36 @@ def execute_step():
     if env.state_data is None:
         obs, _ = env.reset()
         agent.reset_memory()
+        if st.session_state.persona == "Unknown":
+            st.session_state.persona = (
+                responder.current_profile.name
+                if responder.current_profile
+                else responder.reset_persona()
+            )
     else:
-        env.state_data.global_volatility = st.session_state.sim_params["volatility"]
-        env.state_data.responder_urgency = st.session_state.sim_params["urgency"]
-        env.state_data.competitor_intensity = st.session_state.sim_params["competitor"]
-        env.state_data.market_sentiment = st.session_state.sim_params["sentiment"]
+        # [CORREÇÃO] Usar replace() para criar um novo estado, já que frozen=True
+        env.state_data = replace(
+            env.state_data,
+            global_volatility=st.session_state.sim_params["volatility"],
+            responder_urgency=st.session_state.sim_params["urgency"],
+            competitor_intensity=st.session_state.sim_params["competitor"],
+            market_sentiment=st.session_state.sim_params["sentiment"],
+        )
+        # Regenera observações baseadas no novo estado injetado
         obs = {a: env._make_obs(env.state_data, a) for a in env.agents}
 
+    # 1. IA Pensa
     act_prop, _, _, belief_probs = agent.select_action(obs["proposer"])
+
+    # 2. Oponentes Reagem
     act_resp = responder.act(obs["responder"])
     act_reg = regulator.act(obs["regulator"])
 
+    # 3. Física
     actions = {"proposer": act_prop, "responder": act_resp, "regulator": act_reg}
     next_obs, rewards, terms, _, infos = env.step(actions)
 
+    # 4. Logging
     belief_vector = (
         belief_probs[0].tolist() if belief_probs.dim() > 1 else belief_probs.tolist()
     )
@@ -191,6 +224,7 @@ def execute_step():
 
     log_entry = {
         "Step": env.state_data.step_count,
+        "Persona": st.session_state.persona,
         "Price": round(price, 2),
         "Budget": round(env.state_data.responder_budget, 2),
         "Cash": round(env.state_data.proposer_cash, 2),
@@ -203,19 +237,20 @@ def execute_step():
         "Belief_Leave": round(belief_vector[2], 2),
         "Real_Action": act_resp,
         "My_Action": act_prop,
-        "P_Vol": round(env.state_data.global_volatility, 2),
-        "P_Comp": round(env.state_data.competitor_intensity, 2),
-        "P_Sent": round(env.state_data.market_sentiment, 2),
-        "P_Urg": round(env.state_data.responder_urgency, 2),
     }
     st.session_state.history.append(log_entry)
 
     if all(terms.values()):
         env.reset()
         agent.reset_memory()
+        st.session_state.persona = responder.reset_persona()
 
 
-st.title("🛡️ MARL Adversarial Market")
+# ==============================================================================
+# RENDERIZAÇÃO
+# ==============================================================================
+
+st.title("🛡️ MARL Adversarial Market: War Room")
 
 if st.session_state.history:
     df = pd.DataFrame(st.session_state.history)
@@ -230,12 +265,11 @@ if st.session_state.history:
 
     kpi1.metric("Caixa", f"${last_row['Cash']:.0f}", delta=f"{last_row['Reward']:.1f}")
     kpi2.metric(
-        "Perdas (Concorrência)",
-        f"{snatch_total}",
-        f"-${lost_revenue_total:.0f}",
-        delta_color="inverse",
+        "Oponente (Persona)",
+        f"{last_row['Persona']}",
+        help="O perfil psicológico do cliente atual.",
     )
-    kpi3.metric("Conversão", f"{conv_rate:.1f}%")
+    kpi3.metric("Conversão Global", f"{conv_rate:.1f}%")
 
     pred_actions = df[["Belief_Wait", "Belief_Buy", "Belief_Leave"]].values.argmax(
         axis=1
@@ -422,6 +456,10 @@ if st.session_state.history:
 
 else:
     st.info("A simulação está parada. Clique em '▶️ Auto Play' na sidebar.")
+
+# ==============================================================================
+# CONTROL LOOP
+# ==============================================================================
 
 if st.session_state.running:
     for _ in range(steps_per_frame):

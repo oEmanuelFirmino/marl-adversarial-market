@@ -22,7 +22,7 @@ class MarketAdversarialEnv(ParallelEnv):
         self.state_data = None
 
         self._observation_spaces = {
-            agent: spaces.Box(low=0.0, high=1.0, shape=(7,), dtype=np.float32)
+            agent: spaces.Box(low=0.0, high=1.0, shape=(8,), dtype=np.float32)
             for agent in self.possible_agents
         }
 
@@ -82,6 +82,7 @@ class MarketAdversarialEnv(ParallelEnv):
                 state.step_count / 100.0,
                 state.competitor_intensity,
                 state.market_sentiment / 2.0,
+                state.last_opponent_action / 2.0,
             ],
             dtype=np.float32,
         )

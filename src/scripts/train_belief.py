@@ -95,7 +95,7 @@ def train_belief_system():
             )
 
     os.makedirs("data/models", exist_ok=True)
-    model_path = "data/models/belief_agent_v4.pt"
+    model_path = "data/models/belief_agent_v5.pt"
     agent.save_checkpoint(model_path)
     print(f">>> Modelo salvo em '{model_path}'")
 
