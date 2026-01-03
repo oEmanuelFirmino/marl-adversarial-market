@@ -11,6 +11,9 @@ class RolloutBuffer:
         self.state_values = []
         self.is_terminals = []
 
+        self.belief_probs = []
+        self.opponent_actions = []
+
     def clear(self):
         del self.actions[:]
         del self.states[:]
@@ -18,14 +21,21 @@ class RolloutBuffer:
         del self.rewards[:]
         del self.state_values[:]
         del self.is_terminals[:]
+        del self.belief_probs[:]
+        del self.opponent_actions[:]
 
-    def add(self, state, action, logprob, reward, state_value, done):
+    def add(
+        self, state, action, logprob, reward, state_value, done, belief_prob, opp_action
+    ):
         self.states.append(state)
         self.actions.append(action)
         self.logprobs.append(logprob)
         self.rewards.append(reward)
         self.state_values.append(state_value)
         self.is_terminals.append(done)
+
+        self.belief_probs.append(belief_prob)
+        self.opponent_actions.append(torch.tensor(opp_action, dtype=torch.long))
 
     def compute_gae_and_returns(self, last_value, gamma=0.99, gae_lambda=0.95):
         """
@@ -58,3 +68,10 @@ class RolloutBuffer:
         old_logprobs = torch.stack(self.logprobs).detach()
 
         return old_states, old_actions, old_logprobs, returns
+
+    def get_belief_data(self):
+        return (
+            torch.stack(self.states).detach(),
+            torch.stack(self.belief_probs).detach(),
+            torch.stack(self.opponent_actions).detach(),
+        )
