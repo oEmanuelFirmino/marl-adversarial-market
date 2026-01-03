@@ -2,7 +2,7 @@ import numpy as np
 from src.agents.base import Agent
 
 
-class FixedBroker(Agent):
+class FixedProposer(Agent):
     """Corretor Conservador: Sempre mantém o preço base."""
 
     def act(self, observation: np.ndarray) -> int:
@@ -10,7 +10,7 @@ class FixedBroker(Agent):
         return 2
 
 
-class FixedInsurer(Agent):
+class FixedRegulator(Agent):
     """Seguradora Padrão: Mantém risco moderado."""
 
     def act(self, observation: np.ndarray) -> int:
@@ -18,9 +18,9 @@ class FixedInsurer(Agent):
         return 0
 
 
-class ThresholdLead(Agent):
+class ThresholdResponder(Agent):
     """
-    Lead Racional:
+    Responder Racional:
     - Compra se (Orçamento > Último Preço) E (Urgência > Minima).
     - Sai do mercado se o tempo estiver acabando.
     """

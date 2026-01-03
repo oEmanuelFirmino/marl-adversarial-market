@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.envs.market_env import MarketAdversarialEnv
-from src.agents.baselines.rule_based import FixedInsurer, ThresholdLead
+from src.agents.baselines.rule_based import FixedRegulator, ThresholdResponder
 from src.engine.trainer import PPOTrainer
 
 
@@ -16,14 +16,14 @@ def train():
 
     env = MarketAdversarialEnv()
 
-    lead_agent = ThresholdLead(
-        "lead", env.observation_space("lead"), env.action_space("lead")
+    responder_agent = ThresholdResponder(
+        "responder", env.observation_space("responder"), env.action_space("responder")
     )
-    insurer_agent = FixedInsurer(
-        "insurer", env.observation_space("insurer"), env.action_space("insurer")
+    regulator_agent = FixedRegulator(
+        "regulator", env.observation_space("regulator"), env.action_space("regulator")
     )
 
-    ppo_agent = PPOTrainer(env, agent_id="broker", lr=0.002, gamma=0.95)
+    ppo_agent = PPOTrainer(env, agent_id="proposer", lr=0.002, gamma=0.95)
 
     max_episodes = 2000
     update_timestep = 500
@@ -38,31 +38,31 @@ def train():
 
         while True:
 
-            action_broker, log_prob, val = ppo_agent.select_action(obs["broker"])
+            action_proposer, log_prob, val = ppo_agent.select_action(obs["proposer"])
 
-            action_lead = lead_agent.act(obs["lead"])
-            action_insurer = insurer_agent.act(obs["insurer"])
+            action_responder = responder_agent.act(obs["responder"])
+            action_regulator = regulator_agent.act(obs["regulator"])
 
             actions = {
-                "broker": action_broker,
-                "lead": action_lead,
-                "insurer": action_insurer,
+                "proposer": action_proposer,
+                "responder": action_responder,
+                "regulator": action_regulator,
             }
 
             next_obs, rewards, terms, truncs, _ = env.step(actions)
             done = all(terms.values()) or all(truncs.values())
 
             ppo_agent.buffer.add(
-                torch.tensor(obs["broker"], dtype=torch.float32),
-                torch.tensor(action_broker),
+                torch.tensor(obs["proposer"], dtype=torch.float32),
+                torch.tensor(action_proposer),
                 log_prob,
-                rewards["broker"],
+                rewards["proposer"],
                 torch.tensor(val),
                 done,
             )
 
             obs = next_obs
-            current_ep_reward += rewards["broker"]
+            current_ep_reward += rewards["proposer"]
             time_step += 1
 
             if time_step % update_timestep == 0:

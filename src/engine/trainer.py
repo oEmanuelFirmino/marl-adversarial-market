@@ -10,8 +10,8 @@ class BeliefPPOTrainer:
     def __init__(
         self,
         env,
-        agent_id="broker",
-        opponent_id="lead",
+        agent_id="proposer",
+        opponent_id="responder",
         lr=0.002,
         gamma=0.99,
         eps_clip=0.2,
@@ -22,8 +22,8 @@ class BeliefPPOTrainer:
 
         Args:
             env: Instância do ambiente PettingZoo/Gym.
-            agent_id: ID do agente sendo treinado (ex: 'broker').
-            opponent_id: ID do oponente alvo da crença (ex: 'lead').
+            agent_id: ID do agente sendo treinado (ex: 'proposer').
+            opponent_id: ID do oponente alvo da crença (ex: 'responder').
             lr: Learning Rate compartilhado.
             gamma: Fator de desconto.
             eps_clip: Parâmetro de clip do PPO (estabilidade).

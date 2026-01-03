@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.envs.market_env import MarketAdversarialEnv
-from src.agents.baselines.rule_based import FixedInsurer, ThresholdLead
+from src.agents.baselines.rule_based import FixedRegulator, ThresholdResponder
 from src.engine.trainer import BeliefPPOTrainer
 
 
@@ -14,14 +14,14 @@ def train_belief_system():
     print(">>> Iniciando Treinamento Híbrido (PPO + Belief) <<<")
 
     env = MarketAdversarialEnv()
-    lead = ThresholdLead(
-        "lead", env.observation_space("lead"), env.action_space("lead")
+    responder = ThresholdResponder(
+        "responder", env.observation_space("responder"), env.action_space("responder")
     )
-    insurer = FixedInsurer(
-        "insurer", env.observation_space("insurer"), env.action_space("insurer")
+    regulator = FixedRegulator(
+        "regulator", env.observation_space("regulator"), env.action_space("regulator")
     )
 
-    agent = BeliefPPOTrainer(env, agent_id="broker", opponent_id="lead")
+    agent = BeliefPPOTrainer(env, agent_id="proposer", opponent_id="responder")
 
     history_rewards = []
     history_belief_loss = []
@@ -38,28 +38,28 @@ def train_belief_system():
 
         while True:
 
-            act_brk, log_brk, val_brk, belief_probs = agent.select_action(obs["broker"])
+            act_brk, log_brk, val_brk, belief_probs = agent.select_action(obs["proposer"])
 
-            act_lead = lead.act(obs["lead"])
-            act_ins = insurer.act(obs["insurer"])
+            act_responder = responder.act(obs["responder"])
+            act_ins = regulator.act(obs["regulator"])
 
-            actions = {"broker": act_brk, "lead": act_lead, "insurer": act_ins}
+            actions = {"proposer": act_brk, "responder": act_responder, "regulator": act_ins}
             next_obs, rewards, terms, truncs, _ = env.step(actions)
             done = all(terms.values())
 
             agent.buffer.add(
-                torch.tensor(obs["broker"], dtype=torch.float32),
+                torch.tensor(obs["proposer"], dtype=torch.float32),
                 torch.tensor(act_brk),
                 log_brk,
-                rewards["broker"],
+                rewards["proposer"],
                 torch.tensor(val_brk),
                 done,
                 belief_probs,
-                act_lead,
+                act_responder,
             )
 
             obs = next_obs
-            ep_reward += rewards["broker"]
+            ep_reward += rewards["proposer"]
             time_step += 1
 
             if time_step % update_timestep == 0:

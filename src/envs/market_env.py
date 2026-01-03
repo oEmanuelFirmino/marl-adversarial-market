@@ -10,13 +10,13 @@ class MarketAdversarialEnv(ParallelEnv):
 
     def __init__(self):
         self.mechanics = SimpleMarketMechanics()
-        self.possible_agents = ["lead", "broker", "insurer"]
+        self.possible_agents = ["responder", "proposer", "regulator"]
         self.agents = self.possible_agents[:]
 
         self._action_spaces = {
-            "lead": spaces.Discrete(3),
-            "broker": spaces.Discrete(5),
-            "insurer": spaces.Discrete(3),
+            "responder": spaces.Discrete(3),
+            "proposer": spaces.Discrete(5),
+            "regulator": spaces.Discrete(3),
         }
 
         self._observation_spaces = {
@@ -65,8 +65,8 @@ class MarketAdversarialEnv(ParallelEnv):
         obs = np.array(
             [
                 state.global_volatility,
-                state.lead_urgency,
-                min(state.lead_budget / 200.0, 1.0),
+                state.responder_urgency,
+                min(state.responder_budget / 200.0, 1.0),
                 min(state.last_transaction_price / 200.0, 1.0),
                 state.step_count / 100.0,
             ],

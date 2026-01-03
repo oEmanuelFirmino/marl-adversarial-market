@@ -15,8 +15,8 @@ def main():
 
     obs, info = env.reset()
     print("[OK] Reset executado.")
-    print(f"    Obs Shape (Lead): {obs['lead'].shape}")
-    print(f"    Exemplo Obs: {obs['lead']}")
+    print(f"    Obs Shape (Responder): {obs['responder'].shape}")
+    print(f"    Exemplo Obs: {obs['responder']}")
 
     print("\n>>> Rodando Simulação Aleatória (10 steps) <<<")
     total_rewards = {a: 0.0 for a in env.possible_agents}
@@ -33,7 +33,7 @@ def main():
         print(f"Step {step+1}:")
         print(f"  Actions: {actions}")
         print(f"  Rewards: {rewards}")
-        print(f"  Deal Occurred: {infos['lead'].get('deal')}")
+        print(f"  Deal Occurred: {infos['responder'].get('deal')}")
 
         if all(terms.values()):
             print(">>> Episódio terminou prematuramente (Deal ou Reject) <<<")

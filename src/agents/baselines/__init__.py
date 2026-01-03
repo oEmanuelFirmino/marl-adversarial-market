@@ -1,4 +1,4 @@
-from .rule_based import FixedBroker, FixedInsurer, ThresholdLead
+from .rule_based import FixedProposer, FixedRegulator, ThresholdResponder
 
 
-__all__ = ["FixedBroker", "FixedInsurer", "ThresholdLead"]
+__all__ = ["FixedProposer", "FixedRegulator", "ThresholdResponder"]
