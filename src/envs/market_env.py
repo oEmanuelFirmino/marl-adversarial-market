@@ -21,18 +21,14 @@ class MarketAdversarialEnv(ParallelEnv):
         self.mechanics = SimpleMarketMechanics()
         self.state_data = None
 
-        # Obs Space: 7 floats (Volatilidade, Urgência, Budget, Preço, Tempo, Concorrência, Sentimento)
         self._observation_spaces = {
             agent: spaces.Box(low=0.0, high=1.0, shape=(7,), dtype=np.float32)
             for agent in self.possible_agents
         }
 
         self._action_spaces = {
-            # [CORREÇÃO] Proposer agora tem 4 ações (0 a 3) em vez de 5
             AgentID("proposer"): spaces.Discrete(4),
-            # Responder (0:Wait, 1:Buy, 2:Leave)
             AgentID("responder"): spaces.Discrete(3),
-            # Regulator (0:Baixo, 1:Médio, 2:Alto)
             AgentID("regulator"): spaces.Discrete(3),
         }
 
@@ -76,7 +72,7 @@ class MarketAdversarialEnv(ParallelEnv):
         return observations, rewards, terminations, truncations, infos
 
     def _make_obs(self, state: MarketState, agent_id: AgentID):
-        # Normalização simples para [0, 1]
+
         obs = np.array(
             [
                 state.global_volatility,
@@ -84,7 +80,6 @@ class MarketAdversarialEnv(ParallelEnv):
                 min(state.responder_budget / 200.0, 1.0),
                 min(state.last_transaction_price / 200.0, 1.0),
                 state.step_count / 100.0,
-                # Novos
                 state.competitor_intensity,
                 state.market_sentiment / 2.0,
             ],

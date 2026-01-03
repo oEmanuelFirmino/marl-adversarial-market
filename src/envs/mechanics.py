@@ -9,18 +9,14 @@ class SimpleMarketMechanics(MarketPhysics):
         self.base_price = 100.0
 
     def reset(self) -> MarketState:
-        # Valores padrão para reset aleatório
-        # Sentimento > 1.0 = Mercado Otimista (Mais dinheiro)
-        # Sentimento < 1.0 = Mercado Pessimista (Menos dinheiro)
+
         sentiment = np.random.uniform(0.8, 1.2)
 
         return MarketState(
             step_count=0,
             global_volatility=np.random.uniform(0.1, 0.3),
-            # --- PARÂMETROS ---
-            competitor_intensity=np.random.uniform(0.0, 0.3),  # Chance de perder o lead
+            competitor_intensity=np.random.uniform(0.0, 0.3),
             market_sentiment=sentiment,
-            # Budget agora é afetado pelo Sentimento de Mercado
             responder_budget=np.random.uniform(80, 150) * sentiment,
             responder_urgency=np.random.uniform(0.0, 1.0),
             proposer_cash=1000.0,
@@ -36,17 +32,10 @@ class SimpleMarketMechanics(MarketPhysics):
         Lógica Física do Mercado.
         """
 
-        # Mapeamento de Ações
         act_proposer = actions.get(AgentID("proposer"), 0)
         act_regulator = actions.get(AgentID("regulator"), 0)
         act_responder = actions.get(AgentID("responder"), 0)
 
-        # 1. Cálculo Económico (Preços)
-        # [CORREÇÃO] Espaço de Ação Otimizado (Sem redundância)
-        # 0: Desconto Agressivo (0.7x) - Para fechar rápido
-        # 1: Desconto Leve (0.9x)      - Para clientes sensíveis
-        # 2: Preço Justo (1.1x)        - Margem padrão
-        # 3: Preço Alto (1.4x)         - Tentativa de lucro máximo
         price_multipliers = {0: 0.7, 1: 0.9, 2: 1.1, 3: 1.4}
 
         multiplier = price_multipliers.get(act_proposer, 1.0)
@@ -57,35 +46,30 @@ class SimpleMarketMechanics(MarketPhysics):
 
         final_price = offered_price + insurance_cost
 
-        # Inicialização
         deal_done = False
 
-        # Recompensas Base (Time decay)
         rewards = {
             AgentID("responder"): -0.1,
             AgentID("proposer"): -0.1,
             AgentID("regulator"): 0.0,
         }
 
-        # 2. Lógica de Concorrência (Competitor Snatch)
         competitor_snatch = False
-        # A chance de perder o lead escala com a intensidade da concorrência
+
         if np.random.random() < (state.competitor_intensity * 0.1):
             competitor_snatch = True
 
-        # 3. Resolução do Turno
         if competitor_snatch:
-            # Perdeu para o concorrente
+
             rewards[AgentID("proposer")] -= 5.0
             rewards[AgentID("responder")] += 1.0
-            act_responder = 2  # Força saída (visualização)
+            act_responder = 2
             deal_done = False
 
-        elif act_responder == 1:  # Tenta Comprar
+        elif act_responder == 1:
             if final_price <= state.responder_budget:
                 deal_done = True
 
-                # Payoffs
                 rewards[AgentID("responder")] = (
                     state.responder_budget - final_price
                 ) + (state.responder_urgency * 10)
@@ -94,13 +78,12 @@ class SimpleMarketMechanics(MarketPhysics):
                     2.0 if state.global_volatility > 0.5 else 0.0
                 )
             else:
-                # Falha na compra (Budget insuficiente)
+
                 rewards[AgentID("responder")] -= 1.0
 
-        elif act_responder == 2:  # Leave
+        elif act_responder == 2:
             rewards[AgentID("responder")] -= 2.0
 
-        # 4. Atualização do Estado
         new_state = MarketState(
             step_count=state.step_count + 1,
             global_volatility=state.global_volatility,

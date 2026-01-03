@@ -8,16 +8,13 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Hack de Path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.envs.market_env import MarketAdversarialEnv
 
-# [MUDOU] Usando StochasticResponder
 from src.agents.baselines.rule_based import FixedRegulator, StochasticResponder
 from src.engine.trainer import BeliefPPOTrainer
 
-# --- Configuração da Página ---
 st.set_page_config(
     page_title="MARL War Room",
     page_icon="🛡️",
@@ -25,7 +22,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# --- CSS Customizado ---
 st.markdown(
     """
 <style>
@@ -42,13 +38,12 @@ st.markdown(
 )
 
 
-# --- Singleton: Carregar Sistema ---
 @st.cache_resource
 def load_system():
     env = MarketAdversarialEnv()
 
     agent = BeliefPPOTrainer(env, agent_id="proposer", opponent_id="responder")
-    model_path = "data/models/belief_agent_v1.pt"
+    model_path = "data/models/belief_agent_v3.pt"
 
     if os.path.exists(model_path):
         agent.load_checkpoint(model_path)
@@ -59,7 +54,6 @@ def load_system():
     agent.policy.eval()
     agent.belief_net.eval()
 
-    # [MUDOU] Oponente Estocástico na Simulação
     responder = StochasticResponder(
         "responder",
         env.observation_space("responder"),
@@ -75,7 +69,6 @@ def load_system():
 
 env, agent, responder, regulator = load_system()
 
-# --- Estado da Sessão ---
 if "history" not in st.session_state:
     st.session_state.history = []
 if "running" not in st.session_state:
@@ -88,7 +81,6 @@ if "sim_params" not in st.session_state:
         "sentiment": 1.0,
     }
 
-# --- Sidebar ---
 with st.sidebar:
     st.header("🎛️ Configuração")
 
@@ -149,13 +141,11 @@ with st.sidebar:
         st.rerun()
 
 
-# --- Função Auxiliar ---
 def perturb_value(val, drift, min_val=0.0, max_val=1.0):
     noise = np.random.uniform(-drift, drift)
     return np.clip(val + noise, min_val, max_val)
 
 
-# --- Lógica de Execução (Backend) ---
 def execute_step():
     if stochastic_mode:
         st.session_state.sim_params["volatility"] = perturb_value(
@@ -225,11 +215,7 @@ def execute_step():
         agent.reset_memory()
 
 
-# ==============================================================================
-# RENDERIZAÇÃO
-# ==============================================================================
-
-st.title("🛡️ MARL Adversarial Market: War Room")
+st.title("🛡️ MARL Adversarial Market")
 
 if st.session_state.history:
     df = pd.DataFrame(st.session_state.history)
@@ -255,7 +241,7 @@ if st.session_state.history:
         axis=1
     )
     acc = np.mean(pred_actions == df["Real_Action"].values) * 100
-    kpi4.metric("Acurácia IA", f"{acc:.1f}%")
+    kpi4.metric("Acurácia do Modelo", f"{acc:.1f}%")
 
     tab_market, tab_comp, tab_brain, tab_table = st.tabs(
         [
@@ -436,10 +422,6 @@ if st.session_state.history:
 
 else:
     st.info("A simulação está parada. Clique em '▶️ Auto Play' na sidebar.")
-
-# ==============================================================================
-# CONTROL LOOP
-# ==============================================================================
 
 if st.session_state.running:
     for _ in range(steps_per_frame):

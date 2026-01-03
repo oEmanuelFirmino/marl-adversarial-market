@@ -6,6 +6,8 @@ from src.engine.buffer import RolloutBuffer
 
 
 class PPOTrainer:
+    """Vanilla PPO (Legado)"""
+
     def __init__(
         self, env, agent_id="proposer", lr=3e-4, gamma=0.99, K_epochs=4, eps_clip=0.2
     ):
@@ -65,6 +67,10 @@ class PPOTrainer:
 
 
 class BeliefPPOTrainer:
+    """
+    Recurrent PPO with TBPTT (Truncated Backpropagation Through Time)
+    """
+
     def __init__(
         self,
         env,
@@ -90,7 +96,6 @@ class BeliefPPOTrainer:
         self.belief_net = RecurrentBeliefNetwork(
             self.obs_dim, self.opp_action_dim, self.hidden_dim
         )
-
         self.policy = RecurrentActorCritic(
             self.obs_dim, self.opp_action_dim, self.action_dim, self.hidden_dim
         )
@@ -111,8 +116,6 @@ class BeliefPPOTrainer:
         self.reset_memory()
 
     def reset_memory(self):
-        """Reinicia a memória (Hidden States). Chamar no início do episódio."""
-
         self.h_belief = torch.zeros(1, 1, self.hidden_dim)
         self.h_policy = torch.zeros(1, 1, self.hidden_dim)
 
@@ -138,7 +141,6 @@ class BeliefPPOTrainer:
     def select_action(self, state):
         with torch.no_grad():
             state_t = torch.FloatTensor(state)
-
             has_batch_dim = state_t.dim() > 1
             if not has_batch_dim:
                 state_t = state_t.unsqueeze(0)
@@ -146,11 +148,9 @@ class BeliefPPOTrainer:
             belief_probs, self.h_belief = self.belief_net.get_probs(
                 state_t, self.h_belief
             )
-
             action, log_prob, self.h_policy = self.policy_old.get_action(
                 state_t, belief_probs, self.h_policy
             )
-
             val = self.policy_old.get_value(state_t, belief_probs, self.h_policy)
 
             if not has_batch_dim:
@@ -160,57 +160,100 @@ class BeliefPPOTrainer:
 
     def update(self):
 
-        old_states, old_actions, old_logprobs, returns = (
-            self.buffer.compute_gae_and_returns(0.0, self.gamma)
-        )
-        b_states, b_probs_old, b_targets = self.buffer.get_belief_data()
+        _, _, _, returns_all = self.buffer.compute_gae_and_returns(0.0, self.gamma)
 
-        batch_size = old_states.size(0)
-        h_belief_batch = torch.zeros(1, batch_size, self.hidden_dim)
-        h_policy_batch = torch.zeros(1, batch_size, self.hidden_dim)
+        seq_len = 10
 
         avg_belief_loss = 0
+
         for _ in range(self.K_epochs):
+            h_belief = torch.zeros(1, 1, self.hidden_dim)
+            epoch_loss = 0
+            count = 0
 
-            predicted_logits, _ = self.belief_net(b_states, h_belief_batch)
-            belief_loss = self.belief_loss_fn(predicted_logits, b_targets)
+            data_generator = self.buffer.get_sequential_batches(seq_len)
 
-            self.belief_optimizer.zero_grad()
-            belief_loss.backward()
-            self.belief_optimizer.step()
-            avg_belief_loss += belief_loss.item()
+            for batch in data_generator:
+                (states, _, _, _, dones, _, opp_actions) = batch
+
+                predicted_logits, h_belief = self.belief_net(states, h_belief)
+
+                loss = self.belief_loss_fn(
+                    predicted_logits.view(-1, self.opp_action_dim), opp_actions.view(-1)
+                )
+
+                self.belief_optimizer.zero_grad()
+                loss.backward()
+                self.belief_optimizer.step()
+
+                h_belief = h_belief.detach()
+
+                if torch.any(dones):
+                    h_belief = torch.zeros(1, 1, self.hidden_dim)
+
+                epoch_loss += loss.item()
+                count += 1
+
+            if count > 0:
+                avg_belief_loss += epoch_loss / count
 
         avg_belief_loss /= self.K_epochs
 
         for _ in range(self.K_epochs):
+            h_policy = torch.zeros(1, 1, self.hidden_dim)
+            data_generator = self.buffer.get_sequential_batches(seq_len)
+            current_idx = 0
 
-            logprobs, state_values, dist_entropy = self.policy.evaluate(
-                old_states, b_probs_old, old_actions, h_policy_batch
-            )
+            for batch in data_generator:
+                (states, actions, old_logprobs, _, dones, belief_probs, _) = batch
 
-            ratios = torch.exp(logprobs - old_logprobs.detach())
-            advantages = returns - state_values.detach().squeeze()
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
+                batch_len = states.shape[1]
+                batch_returns = returns_all[current_idx : current_idx + batch_len]
+                current_idx += batch_len
+                batch_returns = batch_returns.unsqueeze(0).unsqueeze(-1)
 
-            surr1 = ratios * advantages
-            surr2 = (
-                torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
-            )
+                logprobs, state_values, dist_entropy = self.policy.evaluate(
+                    states, belief_probs, actions, h_policy
+                )
 
-            loss = (
-                -torch.min(surr1, surr2)
-                + 0.5 * self.mse_loss(state_values.squeeze(), returns)
-                - 0.01 * dist_entropy
-            )
+                if old_logprobs.dim() > logprobs.dim():
+                    old_logprobs = old_logprobs.squeeze(-1)
 
-            self.optimizer.zero_grad()
-            loss.mean().backward()
-            self.optimizer.step()
+                ratios = torch.exp(logprobs - old_logprobs)
+                advantages = batch_returns - state_values.detach()
+
+                ratios = ratios.view(-1)
+                advantages = advantages.view(-1)
+                state_values = state_values.view(-1)
+                batch_returns_flat = batch_returns.view(-1)
+
+                advantages = (advantages - advantages.mean()) / (
+                    advantages.std() + 1e-7
+                )
+
+                surr1 = ratios * advantages
+                surr2 = (
+                    torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip)
+                    * advantages
+                )
+
+                loss = (
+                    -torch.min(surr1, surr2).mean()
+                    + 0.5 * self.mse_loss(state_values, batch_returns_flat)
+                    - 0.01 * dist_entropy.mean()
+                )
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+
+                h_policy = h_policy.detach()
+
+                if torch.any(dones):
+                    h_policy = torch.zeros(1, 1, self.hidden_dim)
 
         self.policy_old.load_state_dict(self.policy.state_dict())
         self.buffer.clear()
-
-        self.h_belief = self.h_belief.detach()
-        self.h_policy = self.h_policy.detach()
+        self.reset_memory()
 
         return avg_belief_loss

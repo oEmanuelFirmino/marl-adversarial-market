@@ -35,11 +35,6 @@ class RolloutBuffer:
         belief_prob=None,
         opp_action=None,
     ):
-        """
-        Adiciona uma transição ao buffer.
-        belief_prob e opp_action são opcionais (None para PPO Vanilla, Preenchidos para Belief PPO).
-        """
-
         self.states.append(state)
         self.actions.append(action)
         self.logprobs.append(logprob)
@@ -49,18 +44,12 @@ class RolloutBuffer:
 
         if belief_prob is not None:
             self.belief_probs.append(belief_prob)
-
         if opp_action is not None:
-
             if not isinstance(opp_action, torch.Tensor):
                 opp_action = torch.tensor(opp_action, dtype=torch.long)
             self.opponent_actions.append(opp_action)
 
     def compute_gae_and_returns(self, last_value, gamma=0.99, gae_lambda=0.95):
-        """
-        Calcula retornos normalizados e vantagens via GAE.
-        Retorna tensores prontos para o PPO.
-        """
         rewards = self.rewards
         state_values = self.state_values + [last_value]
         is_terminals = self.is_terminals
@@ -69,11 +58,7 @@ class RolloutBuffer:
         gae = 0
 
         for i in reversed(range(len(rewards))):
-            if is_terminals[i]:
-                mask = 0
-            else:
-                mask = 1
-
+            mask = 0 if is_terminals[i] else 1
             delta = rewards[i] + gamma * state_values[i + 1] * mask - state_values[i]
             gae = delta + gamma * gae_lambda * mask * gae
             returns.insert(0, gae + state_values[i])
@@ -82,29 +67,46 @@ class RolloutBuffer:
         returns = (returns - returns.mean()) / (returns.std() + 1e-7)
 
         if len(self.states) > 0 and isinstance(self.states[0], np.ndarray):
-            old_states = torch.tensor(np.array(self.states), dtype=torch.float32)
+            states_t = torch.tensor(np.array(self.states), dtype=torch.float32)
         else:
-            old_states = torch.stack(self.states).detach()
+            states_t = torch.stack(self.states).detach()
 
-        old_actions = torch.stack(self.actions).detach()
-        old_logprobs = torch.stack(self.logprobs).detach()
+        actions_t = torch.stack(self.actions).detach()
+        logprobs_t = torch.stack(self.logprobs).detach()
 
-        return old_states, old_actions, old_logprobs, returns
+        return states_t, actions_t, logprobs_t, returns
 
-    def get_belief_data(self):
-        """Recupera dados específicos para treino da rede de crença."""
-        if not self.belief_probs or not self.opponent_actions:
-            raise ValueError(
-                "Buffer não contém dados de crença. Verifique se belief_prob/opp_action foram passados no .add()"
-            )
+    def get_sequential_batches(self, seq_len=10):
+        """
+        Gerador para TBPTT. Produz batches de [Batch=1, Seq_Len, Features].
+        """
 
         if len(self.states) > 0 and isinstance(self.states[0], np.ndarray):
-            states_tensor = torch.tensor(np.array(self.states), dtype=torch.float32)
+            states_t = torch.tensor(np.array(self.states), dtype=torch.float32)
         else:
-            states_tensor = torch.stack(self.states).detach()
+            states_t = torch.stack(self.states).detach()
 
-        return (
-            states_tensor,
-            torch.stack(self.belief_probs).detach(),
-            torch.stack(self.opponent_actions).detach(),
-        )
+        actions_t = torch.stack(self.actions).detach()
+        logprobs_t = torch.stack(self.logprobs).detach()
+        values_t = torch.tensor(self.state_values, dtype=torch.float32)
+        dones_t = torch.tensor(self.is_terminals, dtype=torch.float32)
+
+        b_probs_t = torch.stack(self.belief_probs).detach()
+        opp_act_t = torch.stack(self.opponent_actions).detach()
+
+        total_steps = len(self.states)
+        num_sequences = total_steps // seq_len
+        cutoff = num_sequences * seq_len
+
+        for i in range(0, cutoff, seq_len):
+            end = i + seq_len
+
+            yield (
+                states_t[i:end].unsqueeze(0),
+                actions_t[i:end].unsqueeze(0),
+                logprobs_t[i:end].unsqueeze(0),
+                values_t[i:end].unsqueeze(0),
+                dones_t[i:end].unsqueeze(0),
+                b_probs_t[i:end].unsqueeze(0),
+                opp_act_t[i:end].unsqueeze(0),
+            )
