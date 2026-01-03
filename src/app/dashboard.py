@@ -1,4 +1,3 @@
-# src/app/dashboard.py
 import sys
 import os
 import time
@@ -13,7 +12,9 @@ from plotly.subplots import make_subplots
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.envs.market_env import MarketAdversarialEnv
-from src.agents.baselines.rule_based import FixedRegulator, ThresholdResponder
+
+# [MUDOU] Usando StochasticResponder
+from src.agents.baselines.rule_based import FixedRegulator, StochasticResponder
 from src.engine.trainer import BeliefPPOTrainer
 
 # --- Configuração da Página ---
@@ -46,7 +47,6 @@ st.markdown(
 def load_system():
     env = MarketAdversarialEnv()
 
-    # Carrega agente com Memória Recorrente
     agent = BeliefPPOTrainer(env, agent_id="proposer", opponent_id="responder")
     model_path = "data/models/belief_agent_v1.pt"
 
@@ -59,8 +59,12 @@ def load_system():
     agent.policy.eval()
     agent.belief_net.eval()
 
-    responder = ThresholdResponder(
-        "responder", env.observation_space("responder"), env.action_space("responder")
+    # [MUDOU] Oponente Estocástico na Simulação
+    responder = StochasticResponder(
+        "responder",
+        env.observation_space("responder"),
+        env.action_space("responder"),
+        irrationality=0.1,
     )
     regulator = FixedRegulator(
         "regulator", env.observation_space("regulator"), env.action_space("regulator")
@@ -88,19 +92,13 @@ if "sim_params" not in st.session_state:
 with st.sidebar:
     st.header("🎛️ Configuração")
 
-    # Controle de Batch/Performance (NOVO)
     st.markdown("### 🚀 Performance")
     steps_per_frame = st.slider(
-        "Atualização do Gráfico (Passos/Frame)",
-        min_value=1,
-        max_value=50,
-        value=5,
-        help="Quanto maior, mais rápido a simulação roda e menos trava a interface.",
+        "Atualização do Gráfico (Passos/Frame)", min_value=1, max_value=50, value=5
     )
 
     st.divider()
 
-    # Modo Estocástico
     stochastic_mode = st.checkbox("🎲 Modo Estocástico", value=False)
     if stochastic_mode:
         drift = st.slider("Intensidade (Drift)", 0.01, 0.2, 0.05)
@@ -109,7 +107,6 @@ with st.sidebar:
 
     st.divider()
 
-    # Parâmetros Físicos
     volatility = st.slider(
         "Volatilidade", 0.0, 1.0, st.session_state.sim_params["volatility"]
     )
@@ -123,7 +120,6 @@ with st.sidebar:
 
     st.divider()
 
-    # Callbacks de Controle
     def start_sim():
         st.session_state.running = True
 
@@ -161,7 +157,6 @@ def perturb_value(val, drift, min_val=0.0, max_val=1.0):
 
 # --- Lógica de Execução (Backend) ---
 def execute_step():
-    # 0. Atualizar Parâmetros
     if stochastic_mode:
         st.session_state.sim_params["volatility"] = perturb_value(
             st.session_state.sim_params["volatility"], drift
@@ -191,18 +186,13 @@ def execute_step():
         env.state_data.market_sentiment = st.session_state.sim_params["sentiment"]
         obs = {a: env._make_obs(env.state_data, a) for a in env.agents}
 
-    # 1. IA Pensa
     act_prop, _, _, belief_probs = agent.select_action(obs["proposer"])
-
-    # 2. Oponentes Reagem
     act_resp = responder.act(obs["responder"])
     act_reg = regulator.act(obs["regulator"])
 
-    # 3. Física
     actions = {"proposer": act_prop, "responder": act_resp, "regulator": act_reg}
     next_obs, rewards, terms, _, infos = env.step(actions)
 
-    # 4. Logging
     belief_vector = (
         belief_probs[0].tolist() if belief_probs.dim() > 1 else belief_probs.tolist()
     )
@@ -236,17 +226,15 @@ def execute_step():
 
 
 # ==============================================================================
-# RENDERIZAÇÃO (Frontend)
+# RENDERIZAÇÃO
 # ==============================================================================
 
 st.title("🛡️ MARL Adversarial Market: War Room")
 
-# Renderizamos apenas se houver dados
 if st.session_state.history:
     df = pd.DataFrame(st.session_state.history)
     last_row = df.iloc[-1]
 
-    # KPIs
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     deals_total = df["Deal"].sum()
     snatch_total = df["Snatch"].sum() if "Snatch" in df.columns else 0
@@ -269,7 +257,6 @@ if st.session_state.history:
     acc = np.mean(pred_actions == df["Real_Action"].values) * 100
     kpi4.metric("Acurácia IA", f"{acc:.1f}%")
 
-    # Abas
     tab_market, tab_comp, tab_brain, tab_table = st.tabs(
         [
             "📈 Dinâmica de Mercado",
@@ -341,7 +328,6 @@ if st.session_state.history:
             fig_share = go.Figure()
             df["Cum_Deals"] = df["Deal"].cumsum()
             df["Cum_Snatch"] = df["Snatch"].cumsum() if "Snatch" in df.columns else 0
-
             fig_share.add_trace(
                 go.Scatter(
                     x=df["Step"],
@@ -369,7 +355,7 @@ if st.session_state.history:
             st.plotly_chart(fig_share, use_container_width=True)
         with col_c2:
             st.markdown("### Análise")
-            st.markdown("Monitoramento de pressão competitiva acumulada.")
+            st.markdown("Monitoramento de pressão competitiva.")
 
     with tab_brain:
         col_b1, col_b2 = st.columns([1, 2])
@@ -426,7 +412,6 @@ if st.session_state.history:
         )
 
         def highlight_events(row):
-            # Correção do erro CSS: retorna None em vez de string vazia
             if row.Deal == 1:
                 return ["background-color: rgba(0, 255, 170, 0.2)"] * len(row)
             elif row.Snatch == 1:
@@ -453,17 +438,14 @@ else:
     st.info("A simulação está parada. Clique em '▶️ Auto Play' na sidebar.")
 
 # ==============================================================================
-# CONTROL LOOP (Executa múltiplos passos antes de atualizar a UI)
+# CONTROL LOOP
 # ==============================================================================
 
 if st.session_state.running:
-    # BATCH PROCESSING: O segredo para performance e responsividade
-    # Executa N passos lógicos sem tocar na UI
     for _ in range(steps_per_frame):
         execute_step()
 
-    # Atualiza a interface (Rerun) apenas uma vez após o lote
-    time.sleep(0.01)  # Delay mínimo só para yield da thread
+    time.sleep(0.01)
     st.rerun()
 
 elif st.session_state.get("do_step", False):
