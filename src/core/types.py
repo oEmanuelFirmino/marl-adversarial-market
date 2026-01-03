@@ -33,7 +33,7 @@ class MarketState:
     proposer_active_deals: int
 
     regulator_capital: float
-    regulator_risk_thresholdd: float
+    regulator_risk_threshold: float
 
     last_transaction_price: float = 0.0
     transaction_occurred: bool = False

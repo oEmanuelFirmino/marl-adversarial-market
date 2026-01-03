@@ -25,8 +25,20 @@ class RolloutBuffer:
         del self.opponent_actions[:]
 
     def add(
-        self, state, action, logprob, reward, state_value, done, belief_prob, opp_action
+        self,
+        state,
+        action,
+        logprob,
+        reward,
+        state_value,
+        done,
+        belief_prob=None,
+        opp_action=None,
     ):
+        """
+        Adiciona uma transição ao buffer.
+        belief_prob e opp_action são opcionais (None para PPO Vanilla, Preenchidos para Belief PPO).
+        """
         self.states.append(state)
         self.actions.append(action)
         self.logprobs.append(logprob)
@@ -34,8 +46,14 @@ class RolloutBuffer:
         self.state_values.append(state_value)
         self.is_terminals.append(done)
 
-        self.belief_probs.append(belief_prob)
-        self.opponent_actions.append(torch.tensor(opp_action, dtype=torch.long))
+        if belief_prob is not None:
+            self.belief_probs.append(belief_prob)
+
+        if opp_action is not None:
+
+            if not isinstance(opp_action, torch.Tensor):
+                opp_action = torch.tensor(opp_action, dtype=torch.long)
+            self.opponent_actions.append(opp_action)
 
     def compute_gae_and_returns(self, last_value, gamma=0.99, gae_lambda=0.95):
         """
@@ -56,20 +74,29 @@ class RolloutBuffer:
                 mask = 1
 
             delta = rewards[i] + gamma * state_values[i + 1] * mask - state_values[i]
-
             gae = delta + gamma * gae_lambda * mask * gae
             returns.insert(0, gae + state_values[i])
 
         returns = torch.tensor(returns, dtype=torch.float32)
         returns = (returns - returns.mean()) / (returns.std() + 1e-7)
 
-        old_states = torch.stack(self.states).detach()
+        if isinstance(self.states[0], np.ndarray):
+            old_states = torch.tensor(np.array(self.states), dtype=torch.float32)
+        else:
+            old_states = torch.stack(self.states).detach()
+
         old_actions = torch.stack(self.actions).detach()
         old_logprobs = torch.stack(self.logprobs).detach()
 
         return old_states, old_actions, old_logprobs, returns
 
     def get_belief_data(self):
+        """Recupera dados específicos para treino da rede de crença."""
+        if not self.belief_probs or not self.opponent_actions:
+            raise ValueError(
+                "Buffer não contém dados de crença. Verifique se belief_prob/opp_action foram passados no .add()"
+            )
+
         return (
             torch.stack(self.states).detach(),
             torch.stack(self.belief_probs).detach(),
