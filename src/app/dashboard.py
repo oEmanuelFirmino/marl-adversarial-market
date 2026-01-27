@@ -1,4 +1,3 @@
-# src/app/dashboard.py
 import sys
 import os
 import time
@@ -10,7 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from dataclasses import (
     replace,
-)  # <--- IMPORTANTE: Necessário para modificar estados frozen
+)  
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
@@ -18,7 +17,6 @@ from src.envs.market_env import MarketAdversarialEnv
 from src.agents.baselines.rule_based import FixedRegulator, DynamicResponder
 from src.engine.trainer import BeliefPPOTrainer
 
-# --- Configuração da Página ---
 st.set_page_config(
     page_title="MARL War Room",
     page_icon="🛡️",
@@ -26,7 +24,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# --- CSS Customizado ---
 st.markdown(
     """
 <style>
@@ -43,7 +40,6 @@ st.markdown(
 )
 
 
-# --- Singleton: Carregar Sistema ---
 @st.cache_resource
 def load_system():
     env = MarketAdversarialEnv()
@@ -53,9 +49,9 @@ def load_system():
 
     if os.path.exists(model_path):
         agent.load_checkpoint(model_path)
-        print(f"✅ Modelo carregado: {model_path}")
+        print(f" Modelo carregado: {model_path}")
     else:
-        print(f"⚠️ Modelo não encontrado. Usando pesos aleatórios.")
+        print(f" Modelo não encontrado. Usando pesos aleatórios.")
 
     agent.policy.eval()
     agent.belief_net.eval()
@@ -72,7 +68,6 @@ def load_system():
 
 env, agent, responder, regulator = load_system()
 
-# --- Estado da Sessão ---
 if "history" not in st.session_state:
     st.session_state.history = []
 if "running" not in st.session_state:
@@ -161,9 +156,7 @@ def perturb_value(val, drift, min_val=0.0, max_val=1.0):
     return np.clip(val + noise, min_val, max_val)
 
 
-# --- Lógica de Execução (Backend) ---
 def execute_step():
-    # 0. Atualizar Parâmetros da Simulação
     if stochastic_mode:
         st.session_state.sim_params["volatility"] = perturb_value(
             st.session_state.sim_params["volatility"], drift
@@ -193,7 +186,6 @@ def execute_step():
                 else responder.reset_persona()
             )
     else:
-        # [CORREÇÃO] Usar replace() para criar um novo estado, já que frozen=True
         env.state_data = replace(
             env.state_data,
             global_volatility=st.session_state.sim_params["volatility"],
@@ -201,21 +193,16 @@ def execute_step():
             competitor_intensity=st.session_state.sim_params["competitor"],
             market_sentiment=st.session_state.sim_params["sentiment"],
         )
-        # Regenera observações baseadas no novo estado injetado
         obs = {a: env._make_obs(env.state_data, a) for a in env.agents}
 
-    # 1. IA Pensa
     act_prop, _, _, belief_probs = agent.select_action(obs["proposer"])
 
-    # 2. Oponentes Reagem
     act_resp = responder.act(obs["responder"])
     act_reg = regulator.act(obs["regulator"])
 
-    # 3. Física
     actions = {"proposer": act_prop, "responder": act_resp, "regulator": act_reg}
     next_obs, rewards, terms, _, infos = env.step(actions)
 
-    # 4. Logging
     belief_vector = (
         belief_probs[0].tolist() if belief_probs.dim() > 1 else belief_probs.tolist()
     )
@@ -245,10 +232,6 @@ def execute_step():
         agent.reset_memory()
         st.session_state.persona = responder.reset_persona()
 
-
-# ==============================================================================
-# RENDERIZAÇÃO
-# ==============================================================================
 
 st.title("🛡️ MARL Adversarial Market: War Room")
 
@@ -424,7 +407,7 @@ if st.session_state.history:
         st.markdown("### 📄 Registro")
         csv_data = df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="📥 Baixar Log (CSV)",
+            label="Baixar Log (CSV)",
             data=csv_data,
             file_name="marl_log.csv",
             mime="text/csv",
@@ -457,9 +440,6 @@ if st.session_state.history:
 else:
     st.info("A simulação está parada. Clique em '▶️ Auto Play' na sidebar.")
 
-# ==============================================================================
-# CONTROL LOOP
-# ==============================================================================
 
 if st.session_state.running:
     for _ in range(steps_per_frame):
